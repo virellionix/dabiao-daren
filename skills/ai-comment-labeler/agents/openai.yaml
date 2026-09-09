@@ -1,4 +1,4 @@
 interface:
   display_name: "打标达人"
-  short_description: "按项目规则标注评论与笔记的态度、细分情绪和行为，保留证据及复核清单"
-  default_prompt: "使用 $ai-comment-labeler，按我提供的项目标签规则标注评论或笔记，区分态度、情绪与行为阶段，保留原文依据并列出复核项。"
+  short_description: "按项目规则打标社媒内容，诊断旧打标程序，按需补上下文并保留证据和复核项"
+  default_prompt: "使用 $ai-comment-labeler，结合我的业务规则和材料完成打标；如果我提供已有程序和错例，先定位错误环节，再按要求改进并验证。"
