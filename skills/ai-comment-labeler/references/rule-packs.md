@@ -42,6 +42,10 @@
 - aggregate：final 取末段作为篇级最终状态；union 取全篇出现集合。每维另保留 ever_seen 辅助集合。single+union 的篇级结果可多值；单选约束作用在段级。
 - denominator：null 表示全部篇；或 `{"dimension":"validity","include":["valid"]}`，该维须 single+final。实际分母按本批重算，不复制示例的固定篇数。
 - actions 可为空。有行为需求时配置每种行动的定义；“退货诉求”和“退款到账”应分开。自责、无力等表达可作为细分标签，不能自动当已执行行为。
+- 顶层可选 `require_ai_review: true`：交付前必须提交完整的逐字段 AI 复核记录。旧项目省略时保持兼容。
+- 标签/动作可选 `validation_status`：unverified 表示尚缺有效试标，命中时必复核；trial_passed 只表示在指定范围完成试标，不是人工真值或业务准确率。省略保留旧行为。无样本类别保留 unverified，不因清空 review_labels 或模型自称 high 而放行。
+
+更换分类时，保留原项目与原始标签，创建版本化规则包和旧码映射。拆为多个新标签的旧码必须重新看原文，不一键转换历史结果。新维度的分母、final/union 仍按项目定义；不可把心理表达计作实际行为。
 
 ## 输入 JSONL
 
@@ -59,7 +63,7 @@
 {"id":"n1-s1","targets":["product"],"aspects":[{"name":"quality","stance":"negative"}],"labels":{"emotion":[{"value":"unknown","evidence":[]}]},"behaviors":[{"action":"return_request","actor":"self","stage":"planned","time_scope":"unspecified","evidence":[{"source":"text","quote":"准备明天申请退货"}]}],"evidence":[{"source":"text","quote":"有杂音"}],"reason":"质量不满与退货计划明确，不能仅据此推断担忧情绪。","confidence":"high","flags":[],"needs_review":false}
 ```
 
-字段严格限于示例，全部必填；没有总体 stance。需要总体态度时在 dimensions 自行定义 stance 维，不强制沿用六类。
+示例中的基础字段全部必填，另可包含下文定义的 ai_review；拒绝其他未定义字段。没有总体 stance。需要总体态度时在 dimensions 自行定义 stance 维，不强制沿用六类。
 
 - labels 必须覆盖所有配置维度，值均为数组。每个具体值单独提供 evidence；至少一段来自本段 text。unknown 可以无证据。每段原文不足时不能沿用前段态度填空。
 - 每项证据是 `{source,quote}`：source 为 text/title/post_summary/parent_comment，quote 必须是指定来源的非空原文子串。全局 evidence 必须非空且包含 text，不能替代具体标签的证据。
@@ -68,9 +72,19 @@
 - “建议别人去退货”是 other+suggested；“别人已经退了”是 other+done；“我明天申请”是 self+planned；“已经申请但未退款”对申请动作可 done，但不代表退款完成。以动作定义为单位判断阶段。
 - reason 不超过 400 字；confidence 为 high/medium/low；flags 为 sarcasm/comparison/quoted_opinion/missing_context/mixed 的数组；needs_review 为布尔值。
 
+可选 `ai_review`（项目 require_ai_review=true 时必填）：
+
+```json
+{"checked_fields":["targets","aspects","labels.emotion","behaviors"],"issues":[{"field":"labels.emotion","detail":"只说检测正常，缺少作者表达释然的原文。"}]}
+```
+
+checked_fields 必须包含 targets、aspects、behaviors 以及每个 `labels.维度名`，不多不少、不重复。issues 只保留未解决项，可空；每项 field 可指以上字段、实际存在的 `behaviors[序号]`（从 0 起）、source 或 record，detail 不超过 400 字。问题即使与 needs_review=false 并存也强制送复核。记录完整不证明 AI 真正理解正确，仍需抽查和独立参考。
+
 ## 汇总与边界
 
 labels.jsonl 保留所有输入、候选、复核原因与模型/规则/输入摘要；review.jsonl 为需要复核的子集。
+
+v2 另在每条结果中输出 review_details（具体字段、原因与说明）及 field_status（candidate/review），summary 输出 review_field_counts。全局置信度/语境风险影响整条；某个标签或动作的问题只定位该字段。source 类复核表示全文覆盖未验，其他字段的 candidate 仅限所给原文，绝非全文验收。candidate 始终不是 confirmed。
 
 documents.jsonl 保留篇 ID、所有段 ID、末段 ID、最终/合并标签、ever_seen、行为及其来源段。同行动、同行为人、同时间范围取最强阶段：done > ongoing > planned > considering > suggested > hypothetical > unknown。时间不同的行为不互相吞掉，例如事件前做过一次、事件后又计划一次，两者都保留。
 

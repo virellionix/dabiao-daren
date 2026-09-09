@@ -171,6 +171,105 @@ class RulePackTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "v1 stance only"):
                 io.evaluate(root / "gold.jsonl", root / "checked/labels.jsonl")
 
+    def checked_review(self, issues=()):
+        return {"checked_fields": sorted(io.review_fields(self.config)), "issues": list(issues)}
+
+    def test_review_location_survives_full_export(self):
+        self.config["require_ai_review"] = True
+        self.config["dimensions"]["emotion"]["labels"]["relieved"]["validation_status"] = "unverified"
+        pred = dict(self.pred, needs_review=True, ai_review=self.checked_review([
+            {"field": "labels.emotion", "detail": "此情绪边界仍需确认。"}]))
+        with tempfile.TemporaryDirectory(prefix="rule-pack-review-test-") as tmp:
+            root = Path(tmp)
+            io.write_jsonl(root / "input.jsonl", [dict(self.row, source_kind="excerpt")])
+            io.write_json(root / "project.json", self.config)
+            io.prepare(root / "input.jsonl", root / "project.json", root / "run")
+            io.write_jsonl(root / "prediction.jsonl", [pred])
+            summary = io.validate(root / "run", root / "prediction.jsonl", root / "checked", "test-only")
+            labeled = io.read_jsonl(root / "checked/labels.jsonl")
+            self.assertEqual(labeled, io.read_jsonl(root / "checked/review.jsonl"))
+            self.assertTrue(labeled[0]["review_required"])
+            self.assertEqual(labeled[0]["field_status"]["labels.emotion"], "review")
+            self.assertEqual(labeled[0]["field_status"]["labels.trust"], "candidate")
+            self.assertEqual({d["field"] for d in labeled[0]["review_details"]},
+                             {"labels.emotion", "source"})
+            self.assertEqual(summary["review_field_counts"], {"labels.emotion": 1, "source": 1})
+            self.assertEqual(summary["auto_candidates"], 0)
+
+    def test_ai_review_required_only_when_enabled(self):
+        self.config["require_ai_review"] = True
+        with self.assertRaisesRegex(ValueError, "explicit ai_review"):
+            io.check_prediction_v2(self.pred, self.row, self.config)
+        self.pred["ai_review"] = self.checked_review()
+        self.assertEqual(io.check_prediction_v2(self.pred, self.row, self.config), [])
+
+    def test_partial_or_invalid_ai_review_rejected(self):
+        variants = [{"checked_fields": ["targets"], "issues": []},
+                    self.checked_review([{"field": "labels.nonexistent", "detail": "x"}]),
+                    self.checked_review([{"field": "behaviors[0]", "detail": "x"}]),
+                    self.checked_review([{"field": "targets", "detail": ""}])]
+        for review in variants:
+            with self.subTest(review=review), self.assertRaises(ValueError):
+                io.check_prediction_v2(dict(self.pred, ai_review=review), self.row, self.config)
+
+    def test_unverified_label_cannot_be_released_by_empty_review_list(self):
+        spec = self.config["dimensions"]["emotion"]
+        spec["review_labels"] = []
+        spec["labels"]["relieved"]["validation_status"] = "unverified"
+        pred = dict(self.pred, ai_review=self.checked_review())
+        reasons = io.check_prediction_v2(pred, self.row, self.config)
+        self.assertIn("unverified_label_emotion:relieved", reasons)
+        details, statuses = io.review_details_v2(pred, self.row, self.config, reasons)
+        self.assertEqual(statuses["labels.emotion"], "review")
+        self.assertEqual(statuses["labels.trust"], "candidate")
+        self.assertEqual(details[0]["field"], "labels.emotion")
+
+    def test_clearly_classified_fine_label_is_not_blanket_reviewed(self):
+        self.config["dimensions"]["emotion"]["labels"]["relieved"]["validation_status"] = "trial_passed"
+        pred = dict(self.pred, ai_review=self.checked_review())
+        reasons = io.check_prediction_v2(pred, self.row, self.config)
+        details, statuses = io.review_details_v2(pred, self.row, self.config, reasons)
+        self.assertFalse(reasons)
+        self.assertFalse(details)
+        self.assertTrue(all(status == "candidate" for status in statuses.values()))
+
+    def test_explicit_issue_keeps_other_fields(self):
+        pred = dict(self.pred, ai_review=self.checked_review([
+            {"field": "labels.trust", "detail": "缺少前后信任变化的原文。"}]))
+        reasons = io.check_prediction_v2(pred, self.row, self.config)
+        self.assertIn("ai_review_issue", reasons)
+        details, statuses = io.review_details_v2(pred, self.row, self.config, reasons)
+        self.assertEqual(statuses["labels.trust"], "review")
+        self.assertEqual(statuses["labels.emotion"], "candidate")
+        self.assertEqual(details[0]["detail"], "缺少前后信任变化的原文。")
+
+    def test_excerpt_stays_source_review_after_ai_pass(self):
+        pred = dict(self.pred, ai_review=self.checked_review())
+        row = dict(self.row, source_kind="excerpt")
+        reasons = io.check_prediction_v2(pred, row, self.config)
+        details, statuses = io.review_details_v2(pred, row, self.config, reasons)
+        self.assertIn("excerpt_not_full_source", reasons)
+        self.assertEqual(details[0]["field"], "source")
+        self.assertEqual(statuses["labels.emotion"], "candidate")
+
+    def test_unverified_and_uncertain_behavior_located(self):
+        self.config["actions"]["inspection"]["validation_status"] = "unverified"
+        pred = dict(self.pred, behaviors=[self.behavior(stage="unknown", actor="unspecified")])
+        reasons = io.check_prediction_v2(pred, self.row, self.config)
+        details, statuses = io.review_details_v2(pred, self.row, self.config, reasons)
+        self.assertIn("unverified_action_inspection", reasons)
+        self.assertEqual({d["field"] for d in details}, {"behaviors[0]"})
+        self.assertEqual(statuses["behaviors"], "review")
+        self.assertEqual(statuses["labels.trust"], "candidate")
+
+    def test_invalid_validation_status_or_ai_review_option_rejected(self):
+        config = copy.deepcopy(self.config)
+        config["actions"]["inspection"]["validation_status"] = "human_confirmed"
+        with self.assertRaisesRegex(ValueError, "validation_status"):
+            io.project_config(config)
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            io.project_config(dict(self.config, require_ai_review="true"))
+
 
 if __name__ == "__main__":
     unittest.main()

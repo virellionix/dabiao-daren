@@ -120,7 +120,10 @@ def project_config(config):
     if "schema_version" in config:
         require(type(config["schema_version"]) is int and config["schema_version"] == 2,
                 "unsupported project schema_version")
-        keys(config, base | {"schema_version", "unit", "dimensions", "actions", "denominator", "rules"})
+        keys(config, base | {"schema_version", "unit", "dimensions", "actions", "denominator", "rules"},
+             {"require_ai_review"})
+        if "require_ai_review" in config:
+            require(type(config["require_ai_review"]) is bool, "require_ai_review must be boolean")
     else:
         keys(config, base)
     for name in ("project_id", "rule_version", "target_brand"):
@@ -162,9 +165,11 @@ def catalog(labels, allow_empty=False):
             "label/action catalog must be object with at most 256 entries")
     for key, label in labels.items():
         text(key, "label key", 200)
-        keys(label, {"name", "definition"})
+        keys(label, {"name", "definition"}, {"validation_status"})
         text(label["name"], "label name", 200)
         text(label["definition"], "label definition", 2000)
+        if "validation_status" in label:
+            choices(label["validation_status"], {"unverified", "trial_passed"}, "validation_status")
 
 
 def index_rows(rows):
@@ -344,7 +349,7 @@ def check_prediction(prediction, row, config):
 
 
 def check_prediction_v2(prediction, row, config):
-    keys(prediction, (PREDICTION_KEYS - {"stance"}) | {"labels", "behaviors"})
+    keys(prediction, (PREDICTION_KEYS - {"stance"}) | {"labels", "behaviors"}, {"ai_review"})
     reasons, _ = check_shared(prediction, row, config)
     keys(prediction["labels"], set(config["dimensions"]))
     for dimension, spec in config["dimensions"].items():
@@ -361,6 +366,8 @@ def check_prediction_v2(prediction, row, config):
             check_evidence(item["evidence"], row, allow_empty=item["value"] == spec["unknown"])
             if item["value"] in spec["review_labels"]:
                 reasons.append("label_" + dimension + ":" + item["value"])
+            if spec["labels"][item["value"]].get("validation_status") == "unverified":
+                reasons.append("unverified_label_" + dimension + ":" + item["value"])
         require(spec["unknown"] not in seen or len(seen) == 1,
                 "unknown label cannot coexist with concrete labels")
     require(isinstance(prediction["behaviors"], list), "behaviors must be array")
@@ -377,9 +384,78 @@ def check_prediction_v2(prediction, row, config):
         seen_behaviors.add(key)
         if behavior["actor"] == "unspecified" or behavior["stage"] == "unknown":
             reasons.append("behavior_uncertain")
+        if config["actions"][behavior["action"]].get("validation_status") == "unverified":
+            reasons.append("unverified_action_" + behavior["action"])
+    require(not config.get("require_ai_review") or "ai_review" in prediction,
+            "project requires explicit ai_review before delivery")
+    if "ai_review" in prediction:
+        review = prediction["ai_review"]
+        keys(review, {"checked_fields", "issues"})
+        fields = review_fields(config)
+        string_list(review["checked_fields"], "checked_fields", fields, nonempty=True)
+        require(set(review["checked_fields"]) == fields, "ai_review must cover every prediction field")
+        require(isinstance(review["issues"], list) and len(review["issues"]) <= 100,
+                "ai_review issues must be array")
+        issue_fields = fields | {"source", "record"} | {
+            "behaviors[%d]" % i for i in range(len(prediction["behaviors"]))}
+        for issue in review["issues"]:
+            keys(issue, {"field", "detail"})
+            choices(issue["field"], issue_fields, "review issue field")
+            text(issue["detail"], "review issue detail", 400)
+        if review["issues"]:
+            reasons.append("ai_review_issue")
     if row["source_kind"] == "excerpt":
         reasons.append("excerpt_not_full_source")
     return list(dict.fromkeys(reasons))
+
+
+def review_fields(config):
+    return {"targets", "aspects", "behaviors"} | {"labels." + d for d in config["dimensions"]}
+
+
+def review_details_v2(prediction, row, config, reasons):
+    """Expose the exact review location, without turning candidates into truth."""
+    details, covered = [], set()
+
+    def add(field, reason, detail):
+        details.append({"field": field, "reason": reason, "detail": detail})
+        covered.add(reason)
+
+    for dimension, spec in config["dimensions"].items():
+        for item in prediction["labels"][dimension]:
+            suffix = dimension + ":" + item["value"]
+            for prefix, note in (("label_", "项目规则要求复核此标签"),
+                                 ("unverified_label_", "此标签尚缺有效试标验证，不能自动放行")):
+                reason = prefix + suffix
+                if reason in reasons:
+                    add("labels." + dimension, reason, spec["title"] + "：" +
+                        spec["labels"][item["value"]]["name"] + "；" + note + "。")
+    for i, behavior in enumerate(prediction["behaviors"]):
+        field = "behaviors[%d]" % i
+        if behavior["actor"] == "unspecified" or behavior["stage"] == "unknown":
+            missing = []
+            if behavior["actor"] == "unspecified":
+                missing.append("是谁做的")
+            if behavior["stage"] == "unknown":
+                missing.append("动作进行到哪一步")
+            add(field, "behavior_uncertain", "需明确" + "、".join(missing) + "；其他已确定行为保留。")
+        reason = "unverified_action_" + behavior["action"]
+        if reason in reasons:
+            add(field, reason, "该动作尚未完成有效试标验证。")
+    for issue in prediction.get("ai_review", {}).get("issues", []):
+        add(issue["field"], "ai_review_issue", issue["detail"])
+    if prediction.get("ai_review", {}).get("issues"):
+        covered.add("model_requested")  # the model supplied a more precise location
+    if "excerpt_not_full_source" in reasons:
+        add("source", "excerpt_not_full_source", "当前只有摘录；可保留摘录内的判断，但不能验收全文覆盖与最终状态。")
+    for reason in reasons:
+        if reason not in covered:
+            add("record", reason, "需复核本条的置信度、语境或整体判断：" + reason)
+    status = {field: ("review" if any(d["field"] in {"record", field} or
+                                    field == "behaviors" and d["field"].startswith("behaviors[")
+                                    for d in details) else "candidate")
+              for field in sorted(review_fields(config))}
+    return details, status
 
 
 def rollup_v2(labeled, config):
@@ -472,9 +548,12 @@ def validate(run, predictions_path, out, model):
     for row in rows:
         prediction = predictions[row["id"]]
         reasons = (check_prediction_v2 if is_v2(config) else check_prediction)(prediction, row, config)
-        labeled.append({"id": row["id"], "input": row, "prediction": prediction,
-                        "review_required": bool(reasons), "review_reasons": reasons,
-                        "provenance": provenance})
+        result = {"id": row["id"], "input": row, "prediction": prediction,
+                  "review_required": bool(reasons), "review_reasons": reasons,
+                  "provenance": provenance}
+        if is_v2(config):
+            result["review_details"], result["field_status"] = review_details_v2(prediction, row, config, reasons)
+        labeled.append(result)
     review = [row for row in labeled if row["review_required"]]
     summary = {"total": len(rows), "review_required": len(review),
                "auto_candidates": len(rows) - len(review),
@@ -484,6 +563,8 @@ def validate(run, predictions_path, out, model):
     if is_v2(config):
         documents, rollup = rollup_v2(labeled, config)
         summary.update(rollup)
+        summary["review_field_counts"] = dict(Counter(d for row in labeled
+            for d in {issue["field"] for issue in row["review_details"]}))
     else:
         summary["stance_counts"] = dict(Counter(row["prediction"]["stance"] for row in labeled))
     out = Path(out)

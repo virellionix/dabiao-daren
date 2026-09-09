@@ -1,0 +1,152 @@
+{
+  "scope": "AI developer expectations for boundary regression; not human gold or business accuracy",
+  "cases": {
+    "t01": {
+      "trust": [
+        "support"
+      ],
+      "not_trust": [
+        "restored"
+      ]
+    },
+    "t02": {
+      "trust": [
+        "restored"
+      ],
+      "emotion": [
+        "relief"
+      ]
+    },
+    "t03": {
+      "content": [
+        "information"
+      ],
+      "emotion": [],
+      "trust": [
+        "not_expressed"
+      ],
+      "behaviors": []
+    },
+    "t04": {
+      "behaviors": [
+        [
+          "book_inspection",
+          "self",
+          "done"
+        ],
+        [
+          "inspection",
+          "self",
+          "planned"
+        ]
+      ]
+    },
+    "t05": {
+      "behaviors": [
+        [
+          "inspection",
+          "self",
+          "done"
+        ]
+      ]
+    },
+    "t06": {
+      "behaviors": [
+        [
+          "police",
+          "self",
+          "considering"
+        ]
+      ]
+    },
+    "t07": {
+      "switch_kind": [
+        "model"
+      ],
+      "behaviors": [
+        [
+          "switch_model",
+          "self",
+          "done"
+        ]
+      ]
+    },
+    "t08": {
+      "switch_kind": [
+        "brand"
+      ],
+      "behaviors": [
+        [
+          "switch_brand",
+          "self",
+          "done"
+        ]
+      ]
+    },
+    "t09": {
+      "review_reason": "excerpt_not_full_source",
+      "not_switch_kind": [
+        "brand"
+      ]
+    },
+    "t10": {
+      "service": [],
+      "behaviors": []
+    },
+    "t11": {
+      "decision": [
+        "choice_uncertain"
+      ],
+      "not_decision": [
+        "switch_hesitation"
+      ],
+      "behaviors": [
+        [
+          "ask_recommendation",
+          "self",
+          "done"
+        ]
+      ]
+    },
+    "t12": {
+      "decision": [
+        "switch_hesitation"
+      ],
+      "not_switch_kind": [
+        "brand"
+      ]
+    },
+    "t13": {
+      "behaviors": [
+        [
+          "complain_platform",
+          "self",
+          "done"
+        ],
+        [
+          "complain_regulator",
+          "self",
+          "done"
+        ]
+      ]
+    },
+    "t14": {
+      "discourse": [
+        "author_disbelieves",
+        "author_rejected"
+      ]
+    },
+    "t15": {
+      "emotion": [
+        "self_blame"
+      ],
+      "review_reason": "unverified_label_emotion:self_blame"
+    },
+    "t16": {
+      "trust": [
+        "support"
+      ],
+      "behaviors": []
+    }
+  }
+}
