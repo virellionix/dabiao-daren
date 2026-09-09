@@ -43,6 +43,7 @@
 - denominator：null 表示全部篇；或 `{"dimension":"validity","include":["valid"]}`，该维须 single+final。实际分母按本批重算，不复制示例的固定篇数。
 - actions 可为空。有行为需求时配置每种行动的定义；“退货诉求”和“退款到账”应分开。自责、无力等表达可作为细分标签，不能自动当已执行行为。
 - 顶层可选 `require_ai_review: true`：交付前必须提交完整的逐字段 AI 复核记录。旧项目省略时保持兼容。
+- 顶层可选 `label_relations`：约束已有标签树的父子关系，例如 `[{"parent":"main","child":"detail","allowed":{"UGC":["feedback","question","unknown"],"BGC":["official","unknown"],"unknown":["unknown"]}}]`。对应维度和码须在本项目配置，两维均为 single；allowed 须覆盖每个父码，子码集合非空。选中父码不允许的子码会校验失败；没有配置关系时不猜测层级。未知父码允许哪些子码也须明确，不能默认放行。
 - 标签/动作可选 `validation_status`：unverified 表示尚缺有效试标，命中时必复核；trial_passed 只表示在指定范围完成试标，不是人工真值或业务准确率。省略保留旧行为。无样本类别保留 unverified，不因清空 review_labels 或模型自称 high 而放行。
 
 更新验证状态时，在私有项目资料中保留对应原文正反例、来源位置、判断及范围。旧表未命中某标签不代表原文没有正例；新候选出现也不自动等于该类已验收。标签主题的验证不能代替行为人和执行阶段验证；只验证标签时，不联动放行动作。类别已试标仍不消除单条缺上下文、来源不足或项目指定的必复核要求。
@@ -55,7 +56,7 @@
 {"id":"n1-s1","document_id":"n1","segment_index":1,"is_last_segment":true,"source_kind":"full_text","text":"星舟耳机有杂音，准备明天申请退货。","context":{"title":"耳机使用体验"}}
 ```
 
-全部所示字段除 context 外必填。ID 唯一；同篇 segment_index 从 1 连续、唯一，且只最后一段 is_last_segment=true。context 只接受 title/post_summary/parent_comment；不填不存在的内容。source_kind 是 full_text 或 excerpt，摘录必送复核。脚本检查序号，不验证是否漏拆或截掉了正文，AI/人工负责覆盖检查。
+全部所示字段除 context 外必填。ID 唯一；同篇 segment_index 从 1 连续、唯一，且只最后一段 is_last_segment=true。context 接受 title/post_summary/post_text/parent_comment/author_profile/image_ocr/image_description 字符串，分别表示标题、原笔记摘要、原笔记正文、父评论、作者资料、图片转写与图片描述；不填不存在的内容。摘要与图片描述不是作者原话。source_kind 是 full_text 或 excerpt，摘录必送复核。脚本检查序号，不验证是否漏拆或截掉了正文，AI/人工负责覆盖检查。
 
 容量：输入最多 10,000 行、总计 5,000,000 字符、单条 text 12,000 字符。默认每批 20 条、16,000 字符；v2 批次预算不包含单独加载的规则包，不能据此承诺 token 用量。超限明确失败，不截断；预测 JSONL 同样有 50,000 字符单行和 5,000,000 字符总量限制，大规则包需分次运行并分别报告覆盖。
 
@@ -68,7 +69,7 @@
 示例中的基础字段全部必填，另可包含下文定义的 ai_review；拒绝其他未定义字段。没有总体 stance。需要总体态度时在 dimensions 自行定义 stance 维，不强制沿用六类。
 
 - labels 必须覆盖所有配置维度，值均为数组。每个具体值单独提供 evidence；至少一段来自本段 text。unknown 可以无证据。每段原文不足时不能沿用前段态度填空。
-- 每项证据是 `{source,quote}`：source 为 text/title/post_summary/parent_comment，quote 必须是指定来源的非空原文子串。全局 evidence 必须非空且包含 text，不能替代具体标签的证据。
+- 每项证据是 `{source,quote}`：source 为 text 或上述 context 类型，quote 必须是指定来源的非空子串。引用转写/摘要的子串不能证明它忠实于原图/原文。全局 evidence 必须非空且包含 text，不能替代具体标签的证据。
 - targets 非空，从 brand/product/creator/advertisement/merchant/platform/competitor/other/none 选择；none 不与其他类型共存。aspects 只记目标范围内观点，每项 name 来自项目、stance 为 positive/negative/neutral，可空。正文只评价博主就不能自动填 brand。
 - behaviors 为数组，每项 action 来自项目；actor 为 self/other/unspecified，stage 为 done/ongoing/planned/considering/suggested/hypothetical/unknown，time_scope 为 before_event/after_event/unspecified。没有事件时间线的项目使用 unspecified，不推断因果。
 - “建议别人去退货”是 other+suggested；“别人已经退了”是 other+done；“我明天申请”是 self+planned；“已经申请但未退款”对申请动作可 done，但不代表退款完成。以动作定义为单位判断阶段。

@@ -2,7 +2,7 @@
 
 本文只描述 v1 兼容模式。需要自定义维度、细分情绪、行为意图/阶段或篇级汇总时使用 [v2 规则包与数据契约](rule-packs.md)，不要混用两种候选格式。
 
-脚本使用 UTF-8 JSON / JSONL。JSONL 每行一个对象，禁止重复 ID、空数据集、未知字段及非有限数。保留原始文本，不修辞、不补上下文。首版单次最多 10,000 行、总计 5,000,000 字符；这是保护限制，不是已验证吞吐能力。默认每批 20 条、16,000 字符，超长单条报错而非截断。
+脚本使用 UTF-8 JSON / JSONL。JSONL 每行一个对象，禁止重复 ID、空数据集、未知字段及非有限数。保留原始文本，不修辞、不虚构上下文；本离线脚本不主动检索。首版单次最多 10,000 行、总计 5,000,000 字符；这是保护限制，不是已验证吞吐能力。默认每批 20 条、16,000 字符，超长单条报错而非截断。
 
 ## 项目 JSON
 
@@ -24,7 +24,7 @@
 {"id":"c001","text":"这款保湿很好","context":{"title":"澄露面霜使用体验","post_summary":"作者在分享澄露面霜的使用感受","parent_comment":""}}
 ```
 
-id/text 必填非空字符串；context 可省略，内部只接受 title、post_summary、parent_comment 字符串。所有行都保留，包括不同 ID 的相同文本。缺失上下文保留为空，不生成虚构内容。
+id/text 必填非空字符串；context 可省略，接受 title、post_summary、post_text、parent_comment、author_profile、image_ocr、image_description 字符串；正文、摘要、图片转写和描述分开保存，后两者不冒充作者文字。所有行都保留，包括不同 ID 的相同文本。缺失上下文保留为空，不生成虚构内容。
 
 ## AI 候选 JSONL
 
@@ -37,7 +37,7 @@ id/text 必填非空字符串；context 可省略，内部只接受 title、post
 - stance：positive / negative / neutral / mixed / no_attitude / uncertain。
 - targets：非空、不重复，从 brand/product/creator/advertisement/merchant/platform/competitor/other/none 选择；none 不与其他对象并存。
 - aspects：数组，可以为空；每项 name 来自项目配置，stance 为 positive/negative/neutral。不同观点允许同一方面多个相反 stance，但不重复相同的 name/stance。
-- evidence：非空数组，每项 source 为 text/title/post_summary/parent_comment，quote 为该字段的非空原文子串；至少一项来自 text。
+- evidence：非空数组，每项 source 为 text 或上述 context 类型，quote 为该字段的非空子串；至少一项来自 text。子串匹配不验证图片转写或摘要的真实性，使用派生内容须由 AI 保留相应复核问题。
 - reason：不超过 400 字的简短依据，不是推理过程。
 - confidence：high / medium / low，未校准自评信号，不能转写为百分比。
 - flags：数组，取自 sarcasm/comparison/quoted_opinion/missing_context/mixed，不重复。

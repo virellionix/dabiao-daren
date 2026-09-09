@@ -14,7 +14,8 @@ STANCES = ("positive", "negative", "neutral", "mixed", "no_attitude", "uncertain
 TARGETS = {"brand", "product", "creator", "advertisement", "merchant",
            "platform", "competitor", "other", "none"}
 FLAGS = {"sarcasm", "comparison", "quoted_opinion", "missing_context", "mixed"}
-CONTEXT = {"title", "post_summary", "parent_comment"}
+CONTEXT = {"title", "post_summary", "post_text", "parent_comment", "author_profile",
+           "image_ocr", "image_description"}
 PREDICTION_KEYS = {"id", "stance", "targets", "aspects", "evidence", "reason",
                    "confidence", "flags", "needs_review"}
 SKILL_ROOT = Path(__file__).resolve().parents[1]
@@ -121,7 +122,7 @@ def project_config(config):
         require(type(config["schema_version"]) is int and config["schema_version"] == 2,
                 "unsupported project schema_version")
         keys(config, base | {"schema_version", "unit", "dimensions", "actions", "denominator", "rules"},
-             {"require_ai_review"})
+             {"require_ai_review", "label_relations"})
         if "require_ai_review" in config:
             require(type(config["require_ai_review"]) is bool, "require_ai_review must be boolean")
     else:
@@ -149,6 +150,20 @@ def project_config(config):
                 "rules must be an array of up to 100 strings")
         for rule in config["rules"]:
             text(rule, "rule", 4000)
+        relations = config.get("label_relations", [])
+        require(isinstance(relations, list) and len(relations) <= 24,
+                "label_relations must be an array of up to 24 entries")
+        for relation in relations:
+            keys(relation, {"parent", "child", "allowed"})
+            choices(relation["parent"], dimensions, "parent dimension")
+            choices(relation["child"], dimensions, "child dimension")
+            require(relation["parent"] != relation["child"], "relation dimensions must differ")
+            parent, child = (dimensions[relation[k]] for k in ("parent", "child"))
+            require(parent["mode"] == child["mode"] == "single",
+                    "label relations require single-label dimensions")
+            keys(relation["allowed"], set(parent["labels"]))
+            for allowed in relation["allowed"].values():
+                string_list(allowed, "allowed child labels", child["labels"], nonempty=True)
         denominator = config["denominator"]
         if denominator is not None:
             keys(denominator, {"dimension", "include"})
@@ -242,7 +257,7 @@ def prepare(input_path, project_path, out, batch_size=20, max_chars=16000):
     rows = inputs(read_jsonl(input_path), config)
     chunks = batches(rows, config, batch_size, max_chars)
     snapshots = {"SKILL.md": (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")}
-    for name in ("codebook.md", "contracts.md", "rule-packs.md"):
+    for name in ("codebook.md", "contracts.md", "rule-packs.md", "labeling-policy.md"):
         snapshots[name] = (SKILL_ROOT / "references" / name).read_text(encoding="utf-8")
     manifest = {
         "schema_version": 1, "input_sha256": digest(encode(rows)),
@@ -370,6 +385,10 @@ def check_prediction_v2(prediction, row, config):
                 reasons.append("unverified_label_" + dimension + ":" + item["value"])
         require(spec["unknown"] not in seen or len(seen) == 1,
                 "unknown label cannot coexist with concrete labels")
+    for relation in config.get("label_relations", []):
+        parent = prediction["labels"][relation["parent"]][0]["value"]
+        child = prediction["labels"][relation["child"]][0]["value"]
+        require(child in relation["allowed"][parent], "label hierarchy conflict: " + relation["child"])
     require(isinstance(prediction["behaviors"], list), "behaviors must be array")
     seen_behaviors = set()
     for behavior in prediction["behaviors"]:

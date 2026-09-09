@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "project_id": "fictional-content",
+  "rule_version": "1.0",
+  "target_brand": "星舟",
+  "aliases": ["星舟耳机"],
+  "aspects": ["quality", "service", "price", "other"],
+  "unit": "item",
+  "dimensions": {
+    "purpose": {
+      "title": "表达目的",
+      "mode": "single",
+      "labels": {
+        "question": {"name": "咨询求助", "definition": "作者提出问题、寻求信息或建议；不因疑问句自动判断负面。"},
+        "feedback": {"name": "使用反馈", "definition": "作者描述自己实际使用产品或服务的体验；引用他人经历不等于本人使用。"},
+        "sharing": {"name": "信息分享", "definition": "主要转述信息或分享知识，未明确构成自己的体验反馈或求助。"},
+        "unknown": {"name": "无法判断", "definition": "缺上下文、目的混合且不能确定主目的，或不在本项目分类范围。"}
+      },
+      "unknown": "unknown",
+      "aggregate": "final",
+      "review_labels": ["unknown"]
+    },
+    "stance": {
+      "title": "对目标品牌及其产品的态度",
+      "mode": "single",
+      "labels": {
+        "positive": {"name": "正面", "definition": "作者明确肯定目标品牌、产品或服务。"},
+        "negative": {"name": "负面", "definition": "作者明确批评、不满或不信任目标品牌、产品或服务；只批评博主不属于本类。"},
+        "neutral": {"name": "中性", "definition": "作者明确表达不褒不贬的评价，例如体验一般；不能作为异常或信息不足的默认值。"},
+        "no_attitude": {"name": "未表达态度", "definition": "对象与语境充分，但作者只是询问、描述事实或评价其他对象，未表达对目标的评价。"},
+        "mixed": {"name": "褒贬并存", "definition": "作者对目标同时给出明确正面和负面评价，不强行选择一方。"},
+        "unknown": {"name": "无法判断", "definition": "对象不明、必要上下文缺失、无法消解的引用或反讽，无法可靠判定目标态度。"}
+      },
+      "unknown": "unknown",
+      "aggregate": "final",
+      "review_labels": ["unknown", "mixed"]
+    }
+  },
+  "actions": {},
+  "denominator": null,
+  "rules": [
+    "这是虚构消费品场景的开发模板，标签按实际业务目的替换；不是所有行业已验收的标准。",
+    "表达目的与态度独立判断。咨询、信息分享或不认同博主不能直接等同不信任品牌。",
+    "BGC、SGC、UGC及其层级须以该客户确认的标签树另行配置；本模板不推定商业合作关系。",
+    "不设置急于辩解等需要猜测心理且无明确业务用途的默认标签；事件专属标签不沿用到其他项目。"
+  ]
+}
