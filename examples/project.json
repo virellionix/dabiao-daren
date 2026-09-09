@@ -1,0 +1,7 @@
+{
+  "project_id": "fictional-chenglu",
+  "rule_version": "0.1",
+  "target_brand": "澄露",
+  "aliases": ["澄露面霜"],
+  "aspects": ["effect", "quality", "price", "service", "marketing", "packaging", "other"]
+}
