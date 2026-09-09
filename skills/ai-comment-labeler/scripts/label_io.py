@@ -19,6 +19,13 @@ PREDICTION_KEYS = {"id", "stance", "targets", "aspects", "evidence", "reason",
                    "confidence", "flags", "needs_review"}
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 MAX_ROWS, MAX_CHARS, MAX_LINE = 10000, 5000000, 50000
+STAGES = ("done", "ongoing", "planned", "considering", "suggested", "hypothetical", "unknown")
+ACTORS = {"self", "other", "unspecified"}
+TIME_SCOPES = {"before_event", "after_event", "unspecified"}
+
+
+def is_v2(config):
+    return config.get("schema_version") == 2
 
 
 def require(condition, message):
@@ -108,12 +115,56 @@ def string_list(value, name, allowed=None, nonempty=False):
 
 
 def project_config(config):
-    keys(config, {"project_id", "rule_version", "target_brand", "aliases", "aspects"})
+    require(isinstance(config, dict), "project must be object")
+    base = {"project_id", "rule_version", "target_brand", "aliases", "aspects"}
+    if "schema_version" in config:
+        require(type(config["schema_version"]) is int and config["schema_version"] == 2,
+                "unsupported project schema_version")
+        keys(config, base | {"schema_version", "unit", "dimensions", "actions", "denominator", "rules"})
+    else:
+        keys(config, base)
     for name in ("project_id", "rule_version", "target_brand"):
         text(config[name], name, 200)
     string_list(config["aliases"], "aliases")
     string_list(config["aspects"], "aspects", nonempty=True)
+    if is_v2(config):
+        choices(config["unit"], {"item", "segment"}, "unit")
+        dimensions = config["dimensions"]
+        require(isinstance(dimensions, dict) and 1 <= len(dimensions) <= 24,
+                "dimensions must contain 1..24 entries")
+        for name, spec in dimensions.items():
+            text(name, "dimension key", 100)
+            keys(spec, {"title", "mode", "labels", "unknown", "aggregate", "review_labels"})
+            text(spec["title"], "dimension title", 200)
+            choices(spec["mode"], {"single", "multi"}, "dimension mode")
+            choices(spec["aggregate"], {"final", "union"}, "aggregate")
+            catalog(spec["labels"])
+            choices(spec["unknown"], spec["labels"], "unknown label")
+            string_list(spec["review_labels"], "review_labels", spec["labels"])
+        catalog(config["actions"], allow_empty=True)
+        require(isinstance(config["rules"], list) and len(config["rules"]) <= 100,
+                "rules must be an array of up to 100 strings")
+        for rule in config["rules"]:
+            text(rule, "rule", 4000)
+        denominator = config["denominator"]
+        if denominator is not None:
+            keys(denominator, {"dimension", "include"})
+            choices(denominator["dimension"], dimensions, "denominator dimension")
+            spec = dimensions[denominator["dimension"]]
+            require(spec["mode"] == "single" and spec["aggregate"] == "final",
+                    "denominator must use a final single-label dimension")
+            string_list(denominator["include"], "denominator include", spec["labels"], nonempty=True)
     return config
+
+
+def catalog(labels, allow_empty=False):
+    require(isinstance(labels, dict) and (allow_empty or labels) and len(labels) <= 256,
+            "label/action catalog must be object with at most 256 entries")
+    for key, label in labels.items():
+        text(key, "label key", 200)
+        keys(label, {"name", "definition"})
+        text(label["name"], "label name", 200)
+        text(label["definition"], "label definition", 2000)
 
 
 def index_rows(rows):
@@ -126,15 +177,37 @@ def index_rows(rows):
     return result
 
 
-def inputs(rows):
+def inputs(rows, config=None):
     index_rows(rows)
+    v2 = config is not None and is_v2(config)
     for row in rows:
-        keys(row, {"id", "text"}, {"context"})
+        required = {"id", "text"}
+        if v2:
+            required |= {"document_id", "segment_index", "is_last_segment", "source_kind"}
+        keys(row, required, {"context"})
         text(row["text"], "text")
         if "context" in row:
             keys(row["context"], set(), CONTEXT)
             for key, value in row["context"].items():
                 text(value, key, empty=True)
+        if v2:
+            text(row["document_id"], "document_id", 200)
+            require(type(row["segment_index"]) is int and row["segment_index"] > 0,
+                    "segment_index must be positive integer")
+            require(type(row["is_last_segment"]) is bool, "is_last_segment must be boolean")
+            choices(row["source_kind"], {"full_text", "excerpt"}, "source_kind")
+    if v2:
+        groups = {}
+        for row in rows:
+            groups.setdefault(row["document_id"], []).append(row)
+        for group in groups.values():
+            ordered = sorted(group, key=lambda row: row["segment_index"])
+            require([r["segment_index"] for r in ordered] == list(range(1, len(group) + 1)),
+                    "segment indexes must be unique and contiguous from 1")
+            require([r["is_last_segment"] for r in ordered] == [False] * (len(group) - 1) + [True],
+                    "exactly the final segment must be marked last")
+            require(config["unit"] != "item" or len(group) == 1,
+                    "item mode requires one row per document")
     return rows
 
 
@@ -142,25 +215,29 @@ def batches(rows, config, batch_size, max_chars):
     require(1 <= batch_size <= 100, "batch-size must be 1..100")
     require(1000 <= max_chars <= MAX_CHARS, "max-chars must be 1000..5000000")
     result, current = [], []
+    # Large rule packs are stored once. Character budgets apply to content;
+    # the model must load the frozen project separately, as SKILL.md requires.
+    project_payload = ({"project_id": config["project_id"], "rule_version": config["rule_version"],
+                        "rules_file": "../project.json"} if is_v2(config) else config)
     for row in rows:
-        payload = {"project": config, "comments": current + [row]}
+        payload = {"project": project_payload, "comments": current + [row]}
         if current and (len(current) >= batch_size or len(encode(payload)) > max_chars):
-            result.append({"project": config, "comments": current})
+            result.append({"project": project_payload, "comments": current})
             current = []
-        require(len(encode({"project": config, "comments": [row]})) <= max_chars,
+        require(len(encode({"project": project_payload, "comments": [row]})) <= max_chars,
                 "single comment exceeds batch budget: " + row["id"])
         current.append(row)
     if current:
-        result.append({"project": config, "comments": current})
+        result.append({"project": project_payload, "comments": current})
     return result
 
 
 def prepare(input_path, project_path, out, batch_size=20, max_chars=16000):
-    rows = inputs(read_jsonl(input_path))
     config = project_config(read_json(project_path))
+    rows = inputs(read_jsonl(input_path), config)
     chunks = batches(rows, config, batch_size, max_chars)
     snapshots = {"SKILL.md": (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")}
-    for name in ("codebook.md", "contracts.md"):
+    for name in ("codebook.md", "contracts.md", "rule-packs.md"):
         snapshots[name] = (SKILL_ROOT / "references" / name).read_text(encoding="utf-8")
     manifest = {
         "schema_version": 1, "input_sha256": digest(encode(rows)),
@@ -188,8 +265,8 @@ def load_run(run):
     run = Path(run)
     manifest = read_json(run / "manifest.json")
     require(manifest.get("schema_version") == 1, "unsupported run schema")
-    rows = inputs(read_jsonl(run / "input.jsonl"))
     config = project_config(read_json(run / "project.json"))
+    rows = inputs(read_jsonl(run / "input.jsonl"), config)
     snapshots = read_json(run / "skill-snapshot.json")
     checks = {"input_sha256": digest(encode(rows)),
               "project_sha256": digest(encode(config)),
@@ -205,10 +282,8 @@ def load_run(run):
     return rows, config, manifest
 
 
-def check_prediction(prediction, row, config):
-    keys(prediction, PREDICTION_KEYS)
+def check_shared(prediction, row, config):
     require(prediction["id"] == row["id"], "mismatched prediction id")
-    choices(prediction["stance"], STANCES, "stance")
     choices(prediction["confidence"], {"high", "medium", "low"}, "confidence")
     string_list(prediction["targets"], "targets", TARGETS, nonempty=True)
     require("none" not in prediction["targets"] or len(prediction["targets"]) == 1,
@@ -224,13 +299,20 @@ def check_prediction(prediction, row, config):
         choices(aspect["stance"], {"positive", "negative", "neutral"}, "aspect stance")
         aspect_pairs.append((aspect["name"], aspect["stance"]))
     require(len(aspect_pairs) == len(set(aspect_pairs)), "duplicate aspect opinion")
-    if prediction["stance"] == "no_attitude":
-        require(not aspect_pairs, "no_attitude cannot have target-brand aspect opinions")
-    if prediction["stance"] in {"positive", "negative", "neutral", "mixed"}:
-        require(set(prediction["targets"]) & {"brand", "product", "advertisement", "merchant"},
-                "brand stance lacks in-scope target type")
-    evidence = prediction["evidence"]
-    require(isinstance(evidence, list) and evidence, "evidence must be nonempty array")
+    check_evidence(prediction["evidence"], row)
+    reasons = []
+    if prediction["confidence"] != "high":
+        reasons.append("confidence_" + prediction["confidence"])
+    if prediction["needs_review"]:
+        reasons.append("model_requested")
+    reasons.extend("flag_" + flag for flag in sorted(prediction["flags"]))
+    return reasons, {pair[1] for pair in aspect_pairs}
+
+
+def check_evidence(evidence, row, allow_empty=False):
+    require(isinstance(evidence, list) and (allow_empty or evidence), "evidence must be nonempty array")
+    if not evidence:
+        return
     current_comment_evidence = False
     for item in evidence:
         keys(item, {"source", "quote"})
@@ -240,21 +322,120 @@ def check_prediction(prediction, row, config):
         require(item["quote"] in source, "evidence is not an original substring: " + row["id"])
         current_comment_evidence |= item["source"] == "text"
     require(current_comment_evidence, "need evidence from current comment, not only context")
-    reasons = []
+
+
+def check_prediction(prediction, row, config):
+    keys(prediction, PREDICTION_KEYS)
+    choices(prediction["stance"], STANCES, "stance")
+    reasons, aspect_stances = check_shared(prediction, row, config)
+    if prediction["stance"] == "no_attitude":
+        require(not prediction["aspects"], "no_attitude cannot have target-brand aspect opinions")
+    if prediction["stance"] in {"positive", "negative", "neutral", "mixed"}:
+        require(set(prediction["targets"]) & {"brand", "product", "advertisement", "merchant"},
+                "brand stance lacks in-scope target type")
     if prediction["stance"] in {"uncertain", "mixed"}:
         reasons.append("stance_" + prediction["stance"])
-    if prediction["confidence"] != "high":
-        reasons.append("confidence_" + prediction["confidence"])
-    if prediction["needs_review"]:
-        reasons.append("model_requested")
-    reasons.extend("flag_" + flag for flag in sorted(prediction["flags"]))
-    aspect_stances = {pair[1] for pair in aspect_pairs}
     overall = prediction["stance"]
     if (overall == "positive" and "negative" in aspect_stances or
             overall == "negative" and "positive" in aspect_stances or
             overall == "neutral" and aspect_stances & {"positive", "negative"}):
         reasons.append("stance_aspect_conflict")
     return reasons
+
+
+def check_prediction_v2(prediction, row, config):
+    keys(prediction, (PREDICTION_KEYS - {"stance"}) | {"labels", "behaviors"})
+    reasons, _ = check_shared(prediction, row, config)
+    keys(prediction["labels"], set(config["dimensions"]))
+    for dimension, spec in config["dimensions"].items():
+        values = prediction["labels"][dimension]
+        require(isinstance(values, list), "dimension values must be array")
+        require(spec["mode"] != "single" or len(values) == 1,
+                "single dimension requires exactly one label: " + dimension)
+        seen = set()
+        for item in values:
+            keys(item, {"value", "evidence"})
+            choices(item["value"], spec["labels"], "dimension label: " + dimension)
+            require(item["value"] not in seen, "duplicate dimension label")
+            seen.add(item["value"])
+            check_evidence(item["evidence"], row, allow_empty=item["value"] == spec["unknown"])
+            if item["value"] in spec["review_labels"]:
+                reasons.append("label_" + dimension + ":" + item["value"])
+        require(spec["unknown"] not in seen or len(seen) == 1,
+                "unknown label cannot coexist with concrete labels")
+    require(isinstance(prediction["behaviors"], list), "behaviors must be array")
+    seen_behaviors = set()
+    for behavior in prediction["behaviors"]:
+        keys(behavior, {"action", "actor", "stage", "time_scope", "evidence"})
+        choices(behavior["action"], config["actions"], "behavior action")
+        choices(behavior["actor"], ACTORS, "behavior actor")
+        choices(behavior["stage"], STAGES, "behavior stage")
+        choices(behavior["time_scope"], TIME_SCOPES, "behavior time_scope")
+        check_evidence(behavior["evidence"], row)
+        key = tuple(behavior[k] for k in ("action", "actor", "stage", "time_scope"))
+        require(key not in seen_behaviors, "duplicate behavior")
+        seen_behaviors.add(key)
+        if behavior["actor"] == "unspecified" or behavior["stage"] == "unknown":
+            reasons.append("behavior_uncertain")
+    if row["source_kind"] == "excerpt":
+        reasons.append("excerpt_not_full_source")
+    return list(dict.fromkeys(reasons))
+
+
+def rollup_v2(labeled, config):
+    groups = {}
+    for row in labeled:
+        groups.setdefault(row["input"]["document_id"], []).append(row)
+    documents = []
+    for doc_id, group in groups.items():
+        group.sort(key=lambda row: row["input"]["segment_index"])
+        final, ever = {}, {}
+        for dimension, spec in config["dimensions"].items():
+            ever[dimension] = list(dict.fromkeys(item["value"] for row in group
+                                  for item in row["prediction"]["labels"][dimension]))
+            final[dimension] = ([item["value"] for item in group[-1]["prediction"]["labels"][dimension]]
+                                if spec["aggregate"] == "final" else ever[dimension])
+            # A union can include unknown at an earlier point. Preserve it in
+            # ever_seen, but do not make it a simultaneous concrete label.
+            if len(final[dimension]) > 1 and spec["unknown"] in final[dimension]:
+                final[dimension] = [v for v in final[dimension] if v != spec["unknown"]]
+        strongest = {}
+        for row in group:
+            for behavior in row["prediction"]["behaviors"]:
+                key = tuple(behavior[k] for k in ("action", "actor", "time_scope"))
+                if key not in strongest or STAGES.index(behavior["stage"]) < STAGES.index(strongest[key]["stage"]):
+                    strongest[key] = {**behavior, "source_id": row["id"]}
+        denominator = config["denominator"]
+        included = denominator is None or bool(set(final[denominator["dimension"]]) & set(denominator["include"]))
+        documents.append({"document_id": doc_id, "segment_ids": [r["id"] for r in group],
+                          "final_segment_id": group[-1]["id"], "labels": final, "ever_seen": ever,
+                          "behaviors": list(strongest.values()), "included_in_denominator": included,
+                          "review_required": any(r["review_required"] for r in group)})
+    included = [doc for doc in documents if doc["included_in_denominator"]]
+    distributions = {}
+    for name in config["dimensions"]:
+        counts = Counter(value for doc in included for value in set(doc["labels"][name]))
+        ever = Counter(value for doc in included for value in set(doc["ever_seen"][name]))
+        distributions[name] = {"counts": dict(counts), "ever_seen_counts": dict(ever),
+                               "rates": {label: n / len(included) for label, n in counts.items()}}
+    actions = {category: {} for category in ("actual", "intent", "after_event_actual")}
+    for category in actions:
+        counts = Counter()
+        for doc in included:
+            found = set()
+            for behavior in doc["behaviors"]:
+                actual = behavior["stage"] in {"done", "ongoing"}
+                selected = (actual if category == "actual" else
+                            behavior["stage"] in {"planned", "considering"} if category == "intent" else
+                            actual and behavior["time_scope"] == "after_event")
+                if behavior["actor"] == "self" and selected:
+                    found.add(behavior["action"])
+            counts.update(found)
+        actions[category] = dict(counts)
+    return documents, {"documents": len(documents), "segments": len(labeled),
+                       "denominator_documents": len(included), "excluded_documents": len(documents) - len(included),
+                       "review_documents": sum(doc["review_required"] for doc in documents),
+                       "dimension_distributions": distributions, "behavior_document_counts": actions}
 
 
 def prediction_rows(path):
@@ -290,7 +471,7 @@ def validate(run, predictions_path, out, model):
     labeled = []
     for row in rows:
         prediction = predictions[row["id"]]
-        reasons = check_prediction(prediction, row, config)
+        reasons = (check_prediction_v2 if is_v2(config) else check_prediction)(prediction, row, config)
         labeled.append({"id": row["id"], "input": row, "prediction": prediction,
                         "review_required": bool(reasons), "review_reasons": reasons,
                         "provenance": provenance})
@@ -298,12 +479,19 @@ def validate(run, predictions_path, out, model):
     summary = {"total": len(rows), "review_required": len(review),
                "auto_candidates": len(rows) - len(review),
                "auto_candidate_coverage": (len(rows) - len(review)) / len(rows),
-               "stance_counts": dict(Counter(row["prediction"]["stance"] for row in labeled)),
                "semantic_accuracy": "not_evaluated", "provenance": provenance}
+    documents = None
+    if is_v2(config):
+        documents, rollup = rollup_v2(labeled, config)
+        summary.update(rollup)
+    else:
+        summary["stance_counts"] = dict(Counter(row["prediction"]["stance"] for row in labeled))
     out = Path(out)
     out.mkdir(parents=True, exist_ok=False)
     write_jsonl(out / "labels.jsonl", labeled)
     write_jsonl(out / "review.jsonl", review)
+    if documents is not None:
+        write_jsonl(out / "documents.jsonl", documents)
     write_json(out / "summary.json", summary)
     return summary
 
@@ -319,6 +507,8 @@ def evaluate(gold_path, labels_path):
         choices(row["stance"], STANCES, "gold stance")
     for row in labeled.values():
         require(isinstance(row.get("prediction"), dict), "invalid checked result")
+        require("stance" in row["prediction"],
+                "evaluate currently supports v1 stance only; do not map v2 labels into v1")
         require(row["prediction"].get("id") == row["id"], "checked prediction id mismatch")
         choices(row["prediction"].get("stance"), STANCES, "predicted stance")
         require(type(row.get("review_required")) is bool, "missing review status")

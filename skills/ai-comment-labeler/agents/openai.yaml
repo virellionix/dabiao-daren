@@ -1,4 +1,4 @@
 interface:
   display_name: "打标达人"
-  short_description: "按品牌与项目规则批量标注社媒评论，保留原文依据并分流人工复核"
-  default_prompt: "使用 $ai-comment-labeler，先确认目标品牌和少量样本的打标标准，再批量标注评论并列出需要复核的记录。"
+  short_description: "按项目规则标注评论与笔记的态度、细分情绪和行为，保留证据及复核清单"
+  default_prompt: "使用 $ai-comment-labeler，按我提供的项目标签规则标注评论或笔记，区分态度、情绪与行为阶段，保留原文依据并列出复核项。"
