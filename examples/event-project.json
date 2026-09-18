@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "project_id": "fictional-event",
+  "rule_version": "1.1",
+  "target_brand": "星舟",
+  "aliases": ["星舟耳机"],
+  "aspects": ["quality", "service", "price"],
+  "unit": "item",
+  "event": {
+    "id": "fictional-battery-notice",
+    "description": "虚构事件：星舟发布耳机电池异常通知。本例没有真实品牌安全事实。",
+    "relevance_dimension": "event_relevance",
+    "related_labels": ["related"]
+  },
+  "dimensions": {
+    "event_relevance": {
+      "title": "与指定事件的相关性",
+      "mode": "single",
+      "labels": {
+        "related": {"name": "事件相关", "definition": "当前文字在讨论指定事件，或关联上下文消解了事件指代。针对事件否认行为因果仍属于讨论事件；不代表作者担忧或行动由此引起。"},
+        "unrelated": {"name": "事件无关", "definition": "材料明确在讨论另一个主题、没有指定事件的话题关联。不能仅因未出现关键词就判无关，也不能把否认行为因果当作整条事件无关。"},
+        "unknown": {"name": "关联待核实", "definition": "没有足够材料判断是否相关，例如孤立的我也换了；不可用采集关键词、批次名称补证据。"}
+      },
+      "unknown": "unknown", "aggregate": "final", "review_labels": ["unknown"]
+    },
+    "brand_concern": {
+      "title": "作者对目标品牌的顾虑",
+      "mode": "single",
+      "labels": {
+        "expressed": {"name": "明确表达顾虑", "definition": "作者对目标品牌或产品明确表达担忧、不放心或不信任；仅转述传闻不等于本人顾虑。"},
+        "not_expressed": {"name": "未表达顾虑", "definition": "所给原文未表达作者对目标的顾虑；仅在原文范围内成立，不代表作者内心没有顾虑。"},
+        "unknown": {"name": "顾虑待核实", "definition": "因指代、引用或上下文缺口不能区分是谁对谁的顾虑。"}
+      },
+      "unknown": "unknown", "aggregate": "final", "review_labels": ["unknown"]
+    }
+  },
+  "actions": {
+    "switch_away": {"name": "转用其他品牌", "definition": "从目标品牌改用其他品牌；同品牌换型号不计此动作。考虑、计划和已执行按 stage 区分。"},
+    "return_to_brand": {"name": "转回目标品牌", "definition": "先离开目标品牌，随后考虑、计划或实际重新使用它；不是转走的另一种完成阶段。"}
+  },
+  "denominator": null,
+  "require_ai_review": true,
+  "rules": [
+    "先判断事件相关性，再独立判断作者品牌顾虑；两者都不能代替每项行为的因果证明。",
+    "仅提到转用话题、询问别人是否转用，不产生本人实际行为；他人经历要标 other。",
+    "行为的 event_link 单独引用原文证明因果或明确否认因果。事件后行动不等于因事件行动，普通更换不默认由事件导致。",
+    "换走后又换回来时保留两个动作及各自阶段和证据；统计是曾发生的行为，不把最强阶段冒充当前使用品牌。"
+  ]
+}

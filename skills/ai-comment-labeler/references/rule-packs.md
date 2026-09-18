@@ -50,6 +50,28 @@
 
 更换分类时，保留原项目与原始标签，创建版本化规则包和旧码映射。拆为多个新标签的旧码必须重新看原文，不一键转换历史结果。新维度的分母、final/union 仍按项目定义；不可把心理表达计作实际行为。
 
+## 可选事件分析
+
+只有项目确实要判断事件影响时增加 `event`：
+
+```json
+{"id":"event-01","description":"用户指定的事件及范围","relevance_dimension":"event_relevance","related_labels":["related"]}
+```
+
+relevance_dimension 必须是项目已定义的单选维度；related_labels 来自该维且不包含 unknown。标签可分事件相关、明确无关、关联待核实，判断当前文字是否讨论该事件；检索词/批次名称不能代替证据。明确说“我不是因为此事件换的”仍在讨论事件，只是否认行为因果，不能直接判整条无关。品牌顾虑另配一维，区分作者明确顾虑、原文未表达、无法判断，不能从相关性直接推导。
+
+启用后**每项行为必填** event_link：
+
+```json
+{"event_id":"event-01","relation":"unknown","evidence":[]}
+```
+
+relation 只能是 caused_by（作者明确归因为此事件）、not_caused_by（原文明示非此事件导致）、unknown（因果不明）。前两类必须单独给证据且包含本条 text；unknown 可空并强制定位到该行为复核。caused_by 还要求本条事件标签属于 related_labels，且不能标 before_event。未启用 event 的旧项目保持原格式，不自动生成归因结论。
+
+“事件后转用”只证明时间；“因为担心本次事件而转用”才可能支持因果。明确否认因果与未提原因不同。当前程序校验标签一致性、来源与非空证据，**不能只靠子串匹配识别一句话是否真有因果**，仍需模型判断和抽查。
+
+转走、转回是动作方向，不是 stage 新枚举：为项目配置不同 action，分别标 considering/planned/done 等。话题提及、询问别人是否换过，不计本人实际行为；实际行为统计只纳入 self + done/ongoing。`examples/event-project.json` 为虚构消费品事件模板，不改变通用模板或现有客户规则。
+
 ## 输入 JSONL
 
 ```json
@@ -89,8 +111,8 @@ labels.jsonl 保留所有输入、候选、复核原因与模型/规则/输入�
 
 v2 另在每条结果中输出 review_details（具体字段、原因与说明）及 field_status（candidate/review），summary 输出 review_field_counts。全局置信度/语境风险影响整条；某个标签或动作的问题只定位该字段。source 类复核表示全文覆盖未验，其他字段的 candidate 仅限所给原文，绝非全文验收。candidate 始终不是 confirmed。
 
-documents.jsonl 保留篇 ID、所有段 ID、末段 ID、最终/合并标签、ever_seen、行为及其来源段。同行动、同行为人、同时间范围取最强阶段：done > ongoing > planned > considering > suggested > hypothetical > unknown。时间不同的行为不互相吞掉，例如事件前做过一次、事件后又计划一次，两者都保留。
+documents.jsonl 保留篇 ID、所有段 ID、末段 ID、最终/合并标签、ever_seen、行为及其来源段。同行动、同行为人、同时间范围（事件分析时还须同因果关系）取最强阶段：done > ongoing > planned > considering > suggested > hypothetical > unknown。时间或因果不同的行为不互相吞掉。转走与转回都保留；这是发生过的行为，不证明当前还在使用哪个品牌。
 
 summary.json 分开报告段数、篇数、实际分母、排除篇数和复核篇数。每维 counts 按篇去重；rates 的分母只取纳入篇数，多选维的百分比之和可超过 100%。行为实际发生仅计 self+done/ongoing；意向计 self+planned/considering；after_event_actual 还要求明确事件后。不同时间范围同篇可同时进入实际和意向，两项不能相加当人数。
 
-这些都是候选分布，含尚待人工复核的结果；不是人工确认统计，不证明语义准确率。v2 暂无内置逐维人工参考评测器，v1 evaluate 会拒绝 v2，不能偷换标签口径。
+启用 event 时另报 event_caused_actual，只计明确 caused_by 的本人实际行为；after_event_actual 仍只是时间统计。它们都是包含待复核项的候选分布，不是人工确认或因果事实统计。不能把事件前/因果不明的行为写成事件影响。逐维参考对比使用 `evaluate_v2.py`，详见 [评测约定](evaluation.md)；v1 evaluate 仍拒绝 v2，不能偷换标签口径。

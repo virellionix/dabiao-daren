@@ -23,6 +23,7 @@ MAX_ROWS, MAX_CHARS, MAX_LINE = 10000, 5000000, 50000
 STAGES = ("done", "ongoing", "planned", "considering", "suggested", "hypothetical", "unknown")
 ACTORS = {"self", "other", "unspecified"}
 TIME_SCOPES = {"before_event", "after_event", "unspecified"}
+EVENT_RELATIONS = {"caused_by", "not_caused_by", "unknown"}
 
 
 def is_v2(config):
@@ -122,7 +123,7 @@ def project_config(config):
         require(type(config["schema_version"]) is int and config["schema_version"] == 2,
                 "unsupported project schema_version")
         keys(config, base | {"schema_version", "unit", "dimensions", "actions", "denominator", "rules"},
-             {"require_ai_review", "label_relations"})
+             {"require_ai_review", "label_relations", "event"})
         if "require_ai_review" in config:
             require(type(config["require_ai_review"]) is bool, "require_ai_review must be boolean")
     else:
@@ -164,6 +165,16 @@ def project_config(config):
             keys(relation["allowed"], set(parent["labels"]))
             for allowed in relation["allowed"].values():
                 string_list(allowed, "allowed child labels", child["labels"], nonempty=True)
+        if "event" in config:
+            event = config["event"]
+            keys(event, {"id", "description", "relevance_dimension", "related_labels"})
+            text(event["id"], "event id", 200)
+            text(event["description"], "event description", 4000)
+            choices(event["relevance_dimension"], dimensions, "event relevance dimension")
+            relevance = dimensions[event["relevance_dimension"]]
+            require(relevance["mode"] == "single", "event relevance must be single-label")
+            string_list(event["related_labels"], "related event labels", relevance["labels"], nonempty=True)
+            require(relevance["unknown"] not in event["related_labels"], "unknown is not event relevance")
         denominator = config["denominator"]
         if denominator is not None:
             keys(denominator, {"dimension", "include"})
@@ -379,7 +390,7 @@ def check_prediction_v2(prediction, row, config):
             require(item["value"] not in seen, "duplicate dimension label")
             seen.add(item["value"])
             check_evidence(item["evidence"], row, allow_empty=item["value"] == spec["unknown"])
-            if item["value"] in spec["review_labels"]:
+            if item["value"] in spec["review_labels"] or item["value"] == spec["unknown"]:
                 reasons.append("label_" + dimension + ":" + item["value"])
             if spec["labels"][item["value"]].get("validation_status") == "unverified":
                 reasons.append("unverified_label_" + dimension + ":" + item["value"])
@@ -392,12 +403,25 @@ def check_prediction_v2(prediction, row, config):
     require(isinstance(prediction["behaviors"], list), "behaviors must be array")
     seen_behaviors = set()
     for behavior in prediction["behaviors"]:
-        keys(behavior, {"action", "actor", "stage", "time_scope", "evidence"})
+        required = {"action", "actor", "stage", "time_scope", "evidence"}
+        keys(behavior, required | ({"event_link"} if "event" in config else set()))
         choices(behavior["action"], config["actions"], "behavior action")
         choices(behavior["actor"], ACTORS, "behavior actor")
         choices(behavior["stage"], STAGES, "behavior stage")
         choices(behavior["time_scope"], TIME_SCOPES, "behavior time_scope")
         check_evidence(behavior["evidence"], row)
+        if "event" in config:
+            event, link = config["event"], behavior["event_link"]
+            keys(link, {"event_id", "relation", "evidence"})
+            require(link["event_id"] == event["id"], "behavior linked to a different event")
+            choices(link["relation"], EVENT_RELATIONS, "event relation")
+            check_evidence(link["evidence"], row, allow_empty=link["relation"] == "unknown")
+            if link["relation"] == "caused_by":
+                relevance = prediction["labels"][event["relevance_dimension"]][0]["value"]
+                require(relevance in event["related_labels"], "event cause requires event relevance")
+                require(behavior["time_scope"] != "before_event", "event cannot cause a prior action")
+            elif link["relation"] == "unknown":
+                reasons.append("event_cause_unknown")
         key = tuple(behavior[k] for k in ("action", "actor", "stage", "time_scope"))
         require(key not in seen_behaviors, "duplicate behavior")
         seen_behaviors.add(key)
@@ -461,6 +485,8 @@ def review_details_v2(prediction, row, config, reasons):
         reason = "unverified_action_" + behavior["action"]
         if reason in reasons:
             add(field, reason, "该动作尚未完成有效试标验证。")
+        if behavior.get("event_link", {}).get("relation") == "unknown":
+            add(field, "event_cause_unknown", "行为可保留，但尚无证据认定由本次事件引起。")
     for issue in prediction.get("ai_review", {}).get("issues", []):
         add(issue["field"], "ai_review_issue", issue["detail"])
     if prediction.get("ai_review", {}).get("issues"):
@@ -498,6 +524,8 @@ def rollup_v2(labeled, config):
         for row in group:
             for behavior in row["prediction"]["behaviors"]:
                 key = tuple(behavior[k] for k in ("action", "actor", "time_scope"))
+                if "event" in config:
+                    key += (behavior["event_link"]["relation"],)
                 if key not in strongest or STAGES.index(behavior["stage"]) < STAGES.index(strongest[key]["stage"]):
                     strongest[key] = {**behavior, "source_id": row["id"]}
         denominator = config["denominator"]
@@ -514,6 +542,8 @@ def rollup_v2(labeled, config):
         distributions[name] = {"counts": dict(counts), "ever_seen_counts": dict(ever),
                                "rates": {label: n / len(included) for label, n in counts.items()}}
     actions = {category: {} for category in ("actual", "intent", "after_event_actual")}
+    if "event" in config:
+        actions["event_caused_actual"] = {}
     for category in actions:
         counts = Counter()
         for doc in included:
@@ -522,7 +552,8 @@ def rollup_v2(labeled, config):
                 actual = behavior["stage"] in {"done", "ongoing"}
                 selected = (actual if category == "actual" else
                             behavior["stage"] in {"planned", "considering"} if category == "intent" else
-                            actual and behavior["time_scope"] == "after_event")
+                            actual and behavior["time_scope"] == "after_event" if category == "after_event_actual" else
+                            actual and behavior.get("event_link", {}).get("relation") == "caused_by")
                 if behavior["actor"] == "self" and selected:
                     found.add(behavior["action"])
             counts.update(found)

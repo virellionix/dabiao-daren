@@ -126,15 +126,13 @@ class SharedLabeler:
                     located, fields = io.review_details_v2(pred, row, self.project, reasons)
                     for dimension, spec in self.project["dimensions"].items():
                         values = pred["labels"][dimension]
-                        if any(v["value"] == spec["unknown"] for v in values):
-                            located.append({"field": "labels." + dimension, "reason": "unknown_label",
-                                            "detail": "信息不足，不能当成中性或正常结果。"})
                         if any(e["source"] in {"image_ocr", "image_description"}
                                for v in values for e in v["evidence"]):
                             located.append({"field": "labels." + dimension, "reason": "derived_image_evidence",
                                             "detail": "使用图像转写/描述，需核对原图；未证明图像内容正确。"})
                     if any(e["source"] in {"image_ocr", "image_description"}
-                           for e in pred["evidence"] + [e for b in pred["behaviors"] for e in b["evidence"]]):
+                           for e in pred["evidence"] + [e for b in pred["behaviors"]
+                               for e in b["evidence"] + b.get("event_link", {}).get("evidence", [])]):
                         located.append({"field": "source", "reason": "derived_image_evidence",
                                         "detail": "总体判断或行为使用了图像转写/描述，需要核对原图。"})
                     for detail in details + located:
