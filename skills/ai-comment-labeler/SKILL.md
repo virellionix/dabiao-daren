@@ -39,7 +39,7 @@ description: "按项目规则标注社媒笔记与评论，或诊断改进已有
 4. `python3 <skill>/scripts/label_io.py validate --run .runs/run-01 --predictions .runs/run-01/predictions --out .runs/run-01/checked --model current-session-unspecified`
 
    能可靠获得精确模型 ID 才替换参数。校验失败只修相应候选，不篡改原始输入或 manifest。辅助脚本变更导致旧运行摘要失配时新建运行，兼容的既有候选可复用。
-5. 交付逐条 `labels.jsonl`、复核 `review.jsonl`、数量/分布 `summary.json`；v2 另有篇级 `documents.jsonl`。对话用中文说明数量、分母、争议及少量“原文—标签—依据”，不要让用户读机器编码猜含义。需要 Excel 时再用可用表格工具转换，核心脚本不自带 Excel 导入导出。
+5. 交付逐条 `labels.jsonl`、复核 `review.jsonl`、数量/分布 `summary.json`；v2 另有篇级 `documents.jsonl`。对话用中文说明数量、分母、争议及少量“原文—标签—依据”，不要让用户读机器编码猜含义。表格输入/回写使用 `scripts/tabular_adapter.py`，CSV/TSV 为标准库，XLSX 仅在调用方提供 `openpyxl` 时启用；核心语义契约仍是 JSONL。
 
 ## 复核与复用
 
@@ -48,4 +48,5 @@ description: "按项目规则标注社媒笔记与评论，或诊断改进已有
 - 类别验收以原文正反例及适用范围为依据，不以旧标注是否命中过该码为门槛。新增试标后逐类同步规则状态和验收依据；有候选不等于验收通过。将未覆盖、证据不足、口径待定和本身必须复核分开说明，不把它们都转成用户补资料任务。
 - 人工确认纠错后保存 ID、原标签、最终标签、证据、原因、规则版本和确认者。规则修改与去敏示例经用户确认后用于新版本；不自动训练或修改共享 Skill。最终测试集不回填提示词。
 - 只有独立人工参考标签才能支持业务质量结论。v1 使用 `label_io.py evaluate`；v2 使用 `evaluate_v2.py` 计算逐维单选/多选与行为组合指标、列出错例 ID，不能强映射到 v1。参考须声明来源且匹配输入/规则摘要；无人工参考时只报告开发参考一致性、复核量和边界，不称业务准确率。
+- `scripts/audit_evidence.py` 只审计引用是否绑定到冻结来源；`scripts/metrics_report.py` 汇总已保存的调用次数、耗时、token usage 和按调用方价格计算的估算成本。没有真实 usage 或价格时必须报告 unavailable，不把空值当作零成本。
 - 本 Skill 的通用范围是不同项目的消费者反馈打标，不是“任意行业文本都已验证”。共享示例验证流程，真实跨项目效果与大批量耗时需另验。

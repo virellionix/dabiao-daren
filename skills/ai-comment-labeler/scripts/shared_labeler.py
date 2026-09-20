@@ -3,6 +3,7 @@
 import copy
 import importlib.util
 from pathlib import Path
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("shared_label_io", ROOT / "scripts/label_io.py")
@@ -83,14 +84,15 @@ class SharedLabeler:
         io.keys(refs, set(), io.CONTEXT)
         for ref in refs.values():
             io.text(ref, "caller-bound context reference", 500)
-        trace, history, details = [], [], []
+        trace, history, details, call_details = [], [], [], []
         calls = 0
 
         def result(status, prediction=None, extra=(), fields=None):
             return {"id": row["id"], "status": status, "input": copy.deepcopy(row),
                     "prediction": prediction, "review_details": details + list(extra),
                     "field_status": fields or {}, "context_trace": trace,
-                    "model_calls": calls, "provenance": copy.deepcopy(self.provenance)}
+                    "model_calls": calls, "model_call_details": copy.deepcopy(call_details),
+                    "provenance": copy.deepcopy(self.provenance)}
 
         for turn in range(2):
             request = {
@@ -107,10 +109,18 @@ class SharedLabeler:
             io.require(len(io.encode(request)) <= 150000, "model request exceeds character budget")
             try:
                 calls += 1
+                started = time.perf_counter()
                 answer = self.model(copy.deepcopy(request))
             except Exception:
+                call_details.append({"status": "error",
+                                     "duration_ms": round((time.perf_counter() - started) * 1000, 3)})
                 return result("error", extra=[{"field": "record", "reason": "model_call_failed",
                                                "detail": "模型调用失败；未自动重试，未生成默认标签。"}])
+            call_details.append({"status": "ok",
+                                 "duration_ms": round((time.perf_counter() - started) * 1000, 3)})
+            usage = getattr(self.model, "last_usage", None)
+            if isinstance(usage, dict):
+                call_details[-1]["usage"] = copy.deepcopy(usage)
             try:
                 if isinstance(answer, str):
                     io.require(len(answer) <= io.MAX_LINE, "model output exceeds limit")

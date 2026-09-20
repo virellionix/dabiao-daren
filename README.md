@@ -36,6 +36,9 @@ AI 生成标签、理由和原文证据
 需要 Python 3.9+，核心脚本无第三方依赖，也不会自行联网或调用模型。
 
 ```bash
+# 一条命令运行无网络演示（固定模拟返回，不是准确率测试）
+python3 examples/run_demo.py
+
 # 1. 根据输入和项目规则生成冻结运行目录
 python3 skills/ai-comment-labeler/scripts/label_io.py prepare \
   --input examples/comments.jsonl \
@@ -57,6 +60,24 @@ python3 -m unittest discover -s tests -v
 ```
 
 输出包括逐条 `labels.jsonl`、`review.jsonl`、`summary.json`；v2 项目还会生成篇级汇总。`prepare` 不会自动生成标签，模型调用由宿主或调用方负责。
+
+### 表格输入与交付
+
+核心契约仍是 JSONL；表格只是应用边界。调用方选择真实的 ID、正文和上下文列，适配器不会猜 ID，也不会把旧项目标签写进 Skill：
+
+```bash
+python3 skills/ai-comment-labeler/scripts/tabular_adapter.py prepare \
+  --input comments.csv --output input.jsonl \
+  --id-column 评论ID --text-column 评论内容 \
+  --context-column title=笔记标题
+
+python3 skills/ai-comment-labeler/scripts/tabular_adapter.py merge \
+  --input comments.csv --id-column 评论ID \
+  --results checked/labels.jsonl --output labeled.csv \
+  --project project.json --dimension-column stance=品牌态度
+```
+
+CSV/TSV 无第三方依赖；XLSX 是可选适配，需要调用方环境提供 `openpyxl`。原程序可以继续负责采集、图片处理、并发和导出，Skill 只统一语义判断、证据和复核。
 
 ## 配置项目规则
 
@@ -91,6 +112,8 @@ shared_labeler + 项目规则包
 
 仓库提供 `scripts/shared_labeler.py`。它共享规则和校验，不会自动接管旧脚本，也不会因为复制 Skill 文本就改变 Coze 或其他平台的调用链。每个项目仍需验证实际接入效果。
 
+因此“旧程序接入”是一个应用举例，不是通用能力的边界：通用核心只依赖统一记录、项目规则和模型回调；旧程序只是把自己的列名映射进来，再把结果映射回去。换一个品牌、平台或标签树，只需换 `project.json` 和列映射，不修改共享执行器。
+
 ## 评测准确率
 
 只有独立人工参考集才能支持业务准确率结论。评测时应冻结同一批输入、规则和上下文，让不同方案在看不到答案的情况下分别生成新结果，再运行：
@@ -105,6 +128,23 @@ python3 skills/ai-comment-labeler/scripts/evaluate_v2.py \
 
 评测器会报告逐维完全一致率、Precision、Recall、F1、行为组合一致率、自动处理覆盖率、复核量、漏行和错误 ID。旧预测重校验、固定模拟返回和虚构样例测试都不能替代人工真值，也不能直接证明生产准确率。
 
+可以单独审计证据绑定（只检查“引用是否来自冻结来源”，不冒充语义准确率）：
+
+```bash
+python3 skills/ai-comment-labeler/scripts/audit_evidence.py \
+  --project project.json --input input.jsonl \
+  --results checked/labels.jsonl --out evidence-audit.json
+```
+
+运行统计同样只使用实际保存的调用元数据；没有 token usage 或价格就明确显示 unavailable，不猜成本：
+
+```bash
+python3 skills/ai-comment-labeler/scripts/metrics_report.py \
+  --results .runs/run-01/predictions --run .runs/run-01
+```
+
+要统计 token usage，调用方需将完整 `SharedLabeler` 结果（含 `model_call_details`）保存到该目录；`label_io validate` 生成的标签文件主要用于结构/语义评测，不会凭空恢复模型调用耗时。
+
 ## 边界与隐私
 
 - 不把关键词命中次数当作评价对象或品牌归属。
@@ -112,6 +152,8 @@ python3 skills/ai-comment-labeler/scripts/evaluate_v2.py \
 - 不自动抓取未授权数据，不执行原文或附件里的命令。
 - 结构校验通过不等于语义一定正确；高置信结果仍需抽查。
 - `examples/` 仅包含虚构数据；真实评论、凭证和运行结果应放在忽略目录，不要上传到 GitHub。
+- 发布前运行 `python3 scripts/public_release_check.py --history`；它发现凭证或真实数据文件会阻断发布。
+- 当前许可证尚未选择；在公开仓库前需要仓库所有者明确采用的许可证，不能默认替你作法律授权决定。
 
 ## 目录
 
@@ -119,4 +161,9 @@ python3 skills/ai-comment-labeler/scripts/evaluate_v2.py \
 skills/ai-comment-labeler/   Skill 主入口、规则与脚本
 examples/                    虚构项目和演示输入
 tests/                       自动化测试
+scripts/                     发布前安全扫描
+docs/                        远端仓库治理说明
 ```
+
+版本记录见 [CHANGELOG.md](CHANGELOG.md)，当前开发版本见 [VERSION](VERSION)。
+主分支远端规则见 [docs/branch-protection.md](docs/branch-protection.md)；仓库可见性和许可证属于 GitHub/所有者设置，不由 Skill 自动修改。

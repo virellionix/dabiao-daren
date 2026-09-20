@@ -68,6 +68,6 @@ resolver 返回以上三个绑定字段，加 status（ok/not_found/permission_d
 - review：存在具体复核项，可能有候选；继续缺关键上下文时也可能没有候选。
 - error：模型调用失败或非法返回，prediction 为空。
 
-每条保留 input、prediction、review_details、field_status、context_trace、model_calls、provenance。provenance 含规则版本及项目/策略/契约/代码摘要，模型 ID 由调用方据实填写；semantic_accuracy 固定 not_measured，不能改成模型自评准确率。
+每条保留 input、prediction、review_details、field_status、context_trace、model_calls、model_call_details、provenance。`model_call_details` 至少记录每次调用的 status 和 duration_ms；如果调用方的模型回调对象在返回后暴露 `last_usage` 字典，共享入口会一并保存 token usage。没有 usage 或价格时统计脚本必须报告 unavailable，不估算成本。provenance 含规则版本及项目/策略/契约/代码摘要，模型 ID 由调用方据实填写；semantic_accuracy 固定 not_measured，不能改成模型自评准确率。
 
 `export_columns` 按维度输出项目标签名称，始终追加「打标状态、复核原因」。无候选时标签为空，unknown 保留「无法判断」等项目名称，不转中性或 false。完整 result 应存调用方私有运行目录；只存两个标签列会丢失证据，不能作为完整验收记录。网络回调、旧程序迁移和实际业务准确率必须分别验收，不因离线演示通过就声称线上生效。
