@@ -7,4 +7,4 @@
 - Add a one-command offline demo and a public-release secret/data gate.
 - Add GitHub Actions regression checks and document the main-branch protection
   policy.
-- Keep license selection pending explicit owner confirmation.
+- Add the MIT License for the repository source and examples.
