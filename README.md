@@ -153,7 +153,7 @@ python3 skills/ai-comment-labeler/scripts/metrics_report.py \
 - 结构校验通过不等于语义一定正确；高置信结果仍需抽查。
 - `examples/` 仅包含虚构数据；真实评论、凭证和运行结果应放在忽略目录，不要上传到 GitHub。
 - 发布前运行 `python3 scripts/public_release_check.py --history`；它发现凭证或真实数据文件会阻断发布。
-- 当前许可证尚未选择；在公开仓库前需要仓库所有者明确采用的许可证，不能默认替你作法律授权决定。
+- 本仓库采用 MIT License；若作品的实际权利人是公司主体，公开前应由公司确认版权声明中的权利人名称。
 
 ## 目录
 
